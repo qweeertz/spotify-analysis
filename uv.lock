@@ -1944,6 +1944,7 @@ dependencies = [
     { name = "pandas" },
     { name = "plotly" },
     { name = "streamlit" },
+    { name = "tzdata" },
 ]
 
 [package.dev-dependencies]
@@ -1958,6 +1959,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=3.1.1" },
     { name = "plotly", specifier = ">=7.1.0" },
     { name = "streamlit", specifier = ">=1.67.0" },
+    { name = "tzdata", specifier = ">=2026.6" },
 ]
 
 [package.metadata.requires-dev]
