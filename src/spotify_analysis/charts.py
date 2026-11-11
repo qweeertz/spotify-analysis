@@ -5,7 +5,7 @@ from collections.abc import Hashable, Sequence
 import pandas as pd
 import plotly.graph_objects as go
 
-from spotify_analysis.analysis import Metric
+from spotify_analysis.analysis import LEVEL_COLUMNS, Level, Metric
 
 # Categorical colors, assigned in this fixed order. A value always gets the color of
 # its position in an *_ORDER list below, so it keeps its color when others are
@@ -42,6 +42,10 @@ OS_ORDER = [
 
 METRIC_LABELS = {"plays": "Plays", "hours": "Hours"}
 METRIC_FORMATS = {"plays": ",.0f", "hours": ",.1f"}
+
+# Longer song and album titles are shortened on the axis; the tooltip shows them
+# in full.
+MAX_TITLE_LENGTH = 35
 
 
 def split_bar(
@@ -193,6 +197,124 @@ def weekday_hour_lines(
     fig.update_xaxes(title="Hour of day", dtick=2)
     fig.update_yaxes(title=METRIC_LABELS[metric], rangemode="tozero")
     return _style(fig, "Listening by hour of day")
+
+
+def top_bar(table: pd.DataFrame, by: Level, metric: Metric, title: str) -> go.Figure:
+    """Horizontal bars of a top list, the first entry on top.
+
+    Args:
+        table: Top list, as returned by `analysis.top`.
+        by: The level the table was calculated for.
+        metric: The metric the table was calculated with.
+        title: Chart title.
+    """
+    names = _names(table, by)
+    fmt = METRIC_FORMATS[metric]
+    fig = go.Figure(
+        go.Bar(
+            x=table[metric],
+            y=names,
+            customdata=names,
+            orientation="h",
+            marker={"color": COLORS[0]},
+            texttemplate=f"%{{x:{fmt}}}",
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate=(f"%{{customdata}}<br>%{{x:{fmt}}} {metric}<extra></extra>"),
+        )
+    )
+    fig.update_xaxes(title=METRIC_LABELS[metric])
+    return _style_bars(fig, title, table, by)
+
+
+def skip_bar(table: pd.DataFrame, by: Level, title: str) -> go.Figure:
+    """Horizontal bars of skip rates, the highest on top.
+
+    Args:
+        table: As returned by `analysis.most_skipped`.
+        by: The level the table was calculated for.
+        title: Chart title.
+    """
+    names = _names(table, by)
+    fig = go.Figure(
+        go.Bar(
+            x=table["skip_rate"],
+            y=names,
+            customdata=list(zip(names, table["plays"])),
+            orientation="h",
+            marker={"color": COLORS[0]},
+            texttemplate="%{x:.0%}",
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate=(
+                "%{customdata[0]}<br>%{x:.0%} of %{customdata[1]:,} plays skipped"
+                "<extra></extra>"
+            ),
+        )
+    )
+    fig.update_xaxes(title="Skip rate", tickformat=".0%", range=[0, 1])
+    return _style_bars(fig, title, table, by)
+
+
+def over_time_line(series: pd.Series, metric: Metric, title: str) -> go.Figure:
+    """Line of listening over time, e.g. per month.
+
+    Args:
+        series: As returned by `analysis.over_time`.
+        metric: The metric the series was calculated with.
+        title: Chart title.
+    """
+    fig = go.Figure(
+        go.Scatter(
+            x=series.index,
+            y=series.values,
+            mode="lines",
+            line={"color": COLORS[0], "width": 2},
+            fill="tozeroy",
+            fillcolor="rgba(42, 120, 214, 0.1)",  # COLORS[0] as a light wash
+            hovertemplate=f"%{{y:{METRIC_FORMATS[metric]}}} {metric}<extra></extra>",
+        )
+    )
+    fig.update_layout(hovermode="x unified")
+    fig.update_xaxes(hoverformat="%b %Y")
+    fig.update_yaxes(title=METRIC_LABELS[metric], rangemode="tozero")
+    return _style(fig, title)
+
+
+def _names(
+    table: pd.DataFrame, by: Level, max_title_length: int | None = None
+) -> list[str]:
+    """Display names: "song – artist", "album – artist" or just "artist".
+
+    With `max_title_length`, a longer song or album title is shortened with "…";
+    the artist is always kept in full.
+    """
+    columns = list(reversed(LEVEL_COLUMNS[by]))
+    names = []
+    for title, *rest in table[columns].astype(str).itertuples(index=False):
+        if max_title_length and len(title) > max_title_length:
+            title = title[: max_title_length - 1] + "…"
+        names.append(" – ".join([title, *rest]))
+    return names
+
+
+def _style_bars(
+    fig: go.Figure, title: str, table: pd.DataFrame, by: Level
+) -> go.Figure:
+    """Shared look of horizontal bar charts: thin rounded bars, first entry on top.
+
+    The bars are placed by their full name, which is unique (Plotly merges bars
+    with equal names); the axis shows the shortened names.
+    """
+    fig.update_layout(height=120 + 36 * len(table), bargap=0.35, barcornerradius=4)
+    fig.update_yaxes(
+        autorange="reversed",
+        showgrid=False,
+        tickmode="array",
+        tickvals=_names(table, by),
+        ticktext=_names(table, by, MAX_TITLE_LENGTH),
+    )
+    return _style(fig, title)
 
 
 def _style(fig: go.Figure, title: str) -> go.Figure:
