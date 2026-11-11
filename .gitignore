@@ -16,3 +16,7 @@ dist/
 # Personal Spotify data – never commit it
 data/
 *.zip
+
+# Dev
+notebooks/
+FEATURES.md

@@ -1,6 +1,7 @@
 """Read Spotify streaming history exports into pandas DataFrames."""
 
 import json
+import re
 import zipfile
 from functools import cache
 from importlib.resources import files
@@ -32,6 +33,46 @@ RENAME_COLUMNS = {
     "audiobook_chapter_title": "chapter",
     "conn_country": "country",
 }
+
+COLUMN_ORDER = [
+    # general
+    "kind",
+    "ts",
+    "country",
+    "local_ts",
+    "skipped",
+    "ms_played",
+    "shuffle",
+    "os",
+    "platform",
+    # music
+    "track",
+    "artist",
+    "album",
+    # podcast
+    "episode",
+    "show",
+    # audiobook
+    "audiobook",
+    "chapter",
+    # Spotify IDs
+    "track_uri",
+    "episode_uri",
+    "audiobook_uri",
+    "audiobook_chapter_uri",
+]
+
+# Checked top to bottom, first match wins (case-insensitive regular expressions).
+# Specific rules come first, e.g. "Partner android_tv ..." is a TV, not Android.
+PLATFORM_RULES = [
+    ("TV", r"android_tv|cast_tv|\btv\b"),
+    ("Other device", r"^partner"),  # stereos, watches, cars, ...
+    ("Windows", r"windows"),
+    ("macOS", r"os x|osx|macos"),
+    ("iOS", r"\bios\b|iphone|ipad"),
+    ("Android", r"android"),
+    ("Linux", r"linux"),
+]
 
 
 def load_streaming_history(source: str | Path | IO[bytes]) -> pd.DataFrame:
@@ -88,6 +129,7 @@ def clean_streaming_history(
         A new DataFrame sorted by ``ts``. ``ts`` is the play's end time in UTC;
         ``local_ts`` is the wall-clock time where it was played (without time
         zone). ``kind`` is one of "music", "podcast", "audiobook" or "unknown".
+        ``os`` is the simplified ``platform``, e.g. "Windows" or "Android".
     """
     df = df.drop(columns=DROP_COLUMNS, errors="ignore").rename(columns=RENAME_COLUMNS)
 
@@ -99,7 +141,18 @@ def clean_streaming_history(
     df.loc[df["episode"].notna(), "kind"] = "podcast"
     df.loc[df["track"].notna(), "kind"] = "music"
 
-    return df.sort_values("ts", ignore_index=True)
+    df["os"] = df["platform"].map(_simplify_platform)
+
+    return df[COLUMN_ORDER].sort_values("ts", ignore_index=True)
+
+
+def _simplify_platform(platform: str | None) -> str:
+    """Map a raw Spotify platform string to an operating system or device type."""
+    if platform:
+        for label, pattern in PLATFORM_RULES:
+            if re.search(pattern, platform, flags=re.IGNORECASE):
+                return label
+    return "Other"
 
 
 def _local_time(
