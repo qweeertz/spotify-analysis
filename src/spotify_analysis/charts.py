@@ -47,6 +47,8 @@ METRIC_FORMATS = {"plays": ",.0f", "hours": ",.1f"}
 # in full.
 MAX_TITLE_LENGTH = 35
 
+WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
 
 def split_bar(
     shares: pd.Series,
@@ -208,23 +210,16 @@ def top_bar(table: pd.DataFrame, by: Level, metric: Metric, title: str) -> go.Fi
         metric: The metric the table was calculated with.
         title: Chart title.
     """
-    names = _names(table, by)
     fmt = METRIC_FORMATS[metric]
-    fig = go.Figure(
-        go.Bar(
-            x=table[metric],
-            y=names,
-            customdata=names,
-            orientation="h",
-            marker={"color": COLORS[0]},
-            texttemplate=f"%{{x:{fmt}}}",
-            textposition="outside",
-            cliponaxis=False,
-            hovertemplate=(f"%{{customdata}}<br>%{{x:{fmt}}} {metric}<extra></extra>"),
-        )
+    fig = _hbar(
+        table[metric],
+        _names(table, by),
+        _names(table, by, MAX_TITLE_LENGTH),
+        texttemplate=f"%{{x:{fmt}}}",
+        hovertemplate=f"%{{y}}<br>%{{x:{fmt}}} {metric}",
     )
     fig.update_xaxes(title=METRIC_LABELS[metric])
-    return _style_bars(fig, title, table, by)
+    return _style(fig, title)
 
 
 def skip_bar(table: pd.DataFrame, by: Level, title: str) -> go.Figure:
@@ -235,25 +230,59 @@ def skip_bar(table: pd.DataFrame, by: Level, title: str) -> go.Figure:
         by: The level the table was calculated for.
         title: Chart title.
     """
-    names = _names(table, by)
-    fig = go.Figure(
-        go.Bar(
-            x=table["skip_rate"],
-            y=names,
-            customdata=list(zip(names, table["plays"])),
-            orientation="h",
-            marker={"color": COLORS[0]},
-            texttemplate="%{x:.0%}",
-            textposition="outside",
-            cliponaxis=False,
-            hovertemplate=(
-                "%{customdata[0]}<br>%{x:.0%} of %{customdata[1]:,} plays skipped"
-                "<extra></extra>"
-            ),
-        )
+    fig = _hbar(
+        table["skip_rate"],
+        _names(table, by),
+        _names(table, by, MAX_TITLE_LENGTH),
+        texttemplate="%{x:.0%}",
+        hovertemplate="%{y}<br>%{x:.0%} of %{customdata:,} plays skipped",
+        customdata=table["plays"],
     )
     fig.update_xaxes(title="Skip rate", tickformat=".0%", range=[0, 1])
-    return _style_bars(fig, title, table, by)
+    return _style(fig, title)
+
+
+def top_days_bar(series: pd.Series, metric: Metric) -> go.Figure:
+    """Horizontal bars of the days with the most listening.
+
+    Args:
+        series: As returned by `analysis.top_days`.
+        metric: The metric the series was calculated with.
+    """
+    fmt = METRIC_FORMATS[metric]
+    days = [f"{day:%a, %d %b %Y}" for day in series.index]
+    fig = _hbar(
+        series,
+        days,
+        days,
+        texttemplate=f"%{{x:{fmt}}}",
+        hovertemplate=f"%{{y}}<br>%{{x:{fmt}}} {metric}",
+    )
+    fig.update_xaxes(title=METRIC_LABELS[metric])
+    return _style(fig, "Top listening days")
+
+
+def on_repeat_bar(table: pd.DataFrame) -> go.Figure:
+    """Horizontal bars of the most plays of one song on a single day.
+
+    Args:
+        table: As returned by `analysis.on_repeat`.
+    """
+    days = [f"{day:%d %b %Y}" for day in table["day"]]
+    names = [f"{name} · {day}" for name, day in zip(_names(table, "song"), days)]
+    short_names = [
+        f"{name} · {day}"
+        for name, day in zip(_names(table, "song", MAX_TITLE_LENGTH), days)
+    ]
+    fig = _hbar(
+        table["plays"],
+        names,
+        short_names,
+        texttemplate="%{x:,}",
+        hovertemplate="%{y}<br>%{x:,} plays",
+    )
+    fig.update_xaxes(title="Plays on that day")
+    return _style(fig, "On repeat")
 
 
 def over_time_line(series: pd.Series, metric: Metric, title: str) -> go.Figure:
@@ -281,6 +310,195 @@ def over_time_line(series: pd.Series, metric: Metric, title: str) -> go.Figure:
     return _style(fig, title)
 
 
+def wrapped_table(table: pd.DataFrame, by: Level, title: str) -> go.Figure:
+    """Table of the top entries of each year: one row per year, one column per rank.
+
+    Args:
+        table: As returned by `analysis.top_per_year`.
+        by: The level the table was calculated for.
+        title: Chart title.
+    """
+    wide = table.assign(name=_names(table, by, MAX_TITLE_LENGTH)).pivot(
+        index="year", columns="rank", values="name"
+    )
+    fig = go.Figure(
+        go.Table(
+            header={
+                "values": ["Year", *[f"#{rank}" for rank in wide.columns]],
+                "align": "left",
+                "fill_color": SURFACE,
+                "line_color": GRID,
+                "font": {"size": 13},
+            },
+            cells={
+                "values": [
+                    wide.index.astype(str),
+                    *[wide[rank].fillna("") for rank in wide.columns],
+                ],
+                "align": "left",
+                "fill_color": SURFACE,
+                "line_color": GRID,
+                "height": 28,
+            },
+            columnwidth=[0.4, *[1] * len(wide.columns)],
+        )
+    )
+    fig.update_layout(height=160 + 36 * len(wide))  # room for names on two lines
+    return _style(fig, title)
+
+
+def rank_lines(
+    table: pd.DataFrame, by: Level, metric: Metric, title: str, max_rank: int = 20
+) -> go.Figure:
+    """Lines of yearly ranks ("bump chart"), rank 1 on top.
+
+    Ranks below `max_rank`, and years without plays, are left as gaps.
+
+    Args:
+        table: As returned by `analysis.rank_by_year`.
+        by: The level the table was calculated for.
+        metric: The metric the table was calculated with.
+        title: Chart title.
+        max_rank: The lowest rank shown.
+    """
+    table = table.assign(name=_names(table, by, MAX_TITLE_LENGTH))
+    years = range(table["year"].min(), table["year"].max() + 1)
+    fig = go.Figure()
+    # groupby(sort=False) keeps the overall ranking, so colors follow it
+    for color, (name, rows) in zip(COLORS, table.groupby("name", sort=False)):
+        rows = rows.set_index("year").reindex(years)
+        rank = rows["rank"].where(rows["rank"] <= max_rank)
+        fig.add_trace(
+            go.Scatter(
+                x=list(years),
+                y=rank,
+                customdata=rows[metric],
+                name=name,
+                mode="lines+markers",
+                line={"color": color, "width": 2},
+                marker={"size": 8, "line": {"color": SURFACE, "width": 2}},
+                hovertemplate=(
+                    f"{name}<br>%{{x}}: rank %{{y}}, "
+                    f"%{{customdata:{METRIC_FORMATS[metric]}}} {metric}<extra></extra>"
+                ),
+            )
+        )
+    fig.update_xaxes(dtick=1)
+    fig.update_yaxes(
+        title="Rank",
+        range=[max_rank + 0.5, 0.5],
+        tickvals=[1, *range(5, max_rank + 1, 5)],
+    )
+    return _style(fig, title)
+
+
+def year_bars(series: pd.Series, title: str, y_title: str) -> go.Figure:
+    """Columns of one value per year, e.g. new artists per year.
+
+    Args:
+        series: Values indexed by year, e.g. from `analysis.new_per_year`.
+        title: Chart title.
+        y_title: What the values are, e.g. "New artists".
+    """
+    fig = go.Figure(
+        go.Bar(
+            x=series.index,
+            y=series.values,
+            marker={"color": COLORS[0]},
+            texttemplate="%{y:,}",
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate=f"%{{x}}: %{{y:,}} {y_title.lower()}<extra></extra>",
+        )
+    )
+    fig.update_layout(bargap=0.35, barcornerradius=4)
+    fig.update_xaxes(dtick=1, showgrid=False)
+    fig.update_yaxes(title=y_title)
+    return _style(fig, title)
+
+
+def calendar_heatmap(daily: pd.Series, metric: Metric, year: int) -> go.Figure:
+    """One square per day of `year`: weeks as columns, weekdays as rows.
+
+    Args:
+        daily: Listening per day, as returned by `analysis.over_time(..., "day")`.
+        metric: The metric the series was calculated with.
+        year: The year to show.
+    """
+    days = pd.date_range(f"{year}-01-01", f"{year}-12-31", freq="D")
+    values = daily.reindex(days)  # days outside the history stay empty (NaN)
+    first_monday = days[0] - pd.Timedelta(days=days[0].dayofweek)
+    week = (days - first_monday).days // 7
+    grid = pd.DataFrame({"week": week, "weekday": days.dayofweek, "value": values})
+    z = grid.pivot(index="weekday", columns="week", values="value")
+    dates = grid.assign(date=days.strftime("%a, %d %b %Y")).pivot(
+        index="weekday", columns="week", values="date"
+    )
+    month_starts = days[days.day == 1]
+    label = METRIC_LABELS[metric]
+    fig = go.Figure(
+        go.Heatmap(
+            z=z.values,
+            x=z.columns,
+            y=WEEKDAY_LABELS,
+            customdata=dates.values,
+            colorscale=SEQUENTIAL,
+            xgap=2,
+            ygap=2,
+            colorbar={"title": label},
+            hovertemplate=(
+                f"%{{customdata}}<br>%{{z:{METRIC_FORMATS[metric]}}} "
+                f"{label.lower()}<extra></extra>"
+            ),
+        )
+    )
+    fig.update_layout(height=280)
+    fig.update_xaxes(
+        tickvals=(month_starts - first_monday).days // 7,
+        ticktext=month_starts.strftime("%b"),
+        showgrid=False,
+    )
+    fig.update_yaxes(autorange="reversed", showgrid=False, scaleanchor="x")
+    return _style(fig, f"Listening in {year}")
+
+
+def _hbar(
+    x: pd.Series,
+    names: list[str],
+    short_names: list[str],
+    texttemplate: str,
+    hovertemplate: str,
+    customdata: pd.Series | None = None,
+) -> go.Figure:
+    """Horizontal bar chart: thin rounded bars, first entry on top.
+
+    The bars are placed by their full name, which must be unique (Plotly merges
+    bars with equal names); the axis shows the short names, the tooltip the full.
+    """
+    fig = go.Figure(
+        go.Bar(
+            x=x,
+            y=names,
+            customdata=customdata,
+            orientation="h",
+            marker={"color": COLORS[0]},
+            texttemplate=texttemplate,
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate=hovertemplate + "<extra></extra>",
+        )
+    )
+    fig.update_layout(height=120 + 36 * len(names), bargap=0.35, barcornerradius=4)
+    fig.update_yaxes(
+        autorange="reversed",
+        showgrid=False,
+        tickmode="array",
+        tickvals=names,
+        ticktext=short_names,
+    )
+    return fig
+
+
 def _names(
     table: pd.DataFrame, by: Level, max_title_length: int | None = None
 ) -> list[str]:
@@ -296,25 +514,6 @@ def _names(
             title = title[: max_title_length - 1] + "…"
         names.append(" – ".join([title, *rest]))
     return names
-
-
-def _style_bars(
-    fig: go.Figure, title: str, table: pd.DataFrame, by: Level
-) -> go.Figure:
-    """Shared look of horizontal bar charts: thin rounded bars, first entry on top.
-
-    The bars are placed by their full name, which is unique (Plotly merges bars
-    with equal names); the axis shows the shortened names.
-    """
-    fig.update_layout(height=120 + 36 * len(table), bargap=0.35, barcornerradius=4)
-    fig.update_yaxes(
-        autorange="reversed",
-        showgrid=False,
-        tickmode="array",
-        tickvals=_names(table, by),
-        ticktext=_names(table, by, MAX_TITLE_LENGTH),
-    )
-    return _style(fig, title)
 
 
 def _style(fig: go.Figure, title: str) -> go.Figure:

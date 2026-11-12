@@ -138,15 +138,80 @@ def select(df: pd.DataFrame, by: Level, key: str | tuple[str, ...]) -> pd.DataFr
 
 
 def over_time(
-    df: pd.DataFrame, metric: Metric, freq: Literal["month", "year"] = "month"
+    df: pd.DataFrame, metric: Metric, freq: Literal["day", "month", "year"] = "month"
 ) -> pd.Series:
-    """Listening per month or year, including periods without any listening (0)."""
-    code = "M" if freq == "month" else "Y"
+    """Listening per day, month or year, including periods without listening (0)."""
+    code = {"day": "D", "month": "M", "year": "Y"}[freq]
     totals = _total_by(df, df["local_ts"].dt.to_period(code).rename(freq), metric)
     if totals.empty:
         return totals
     all_periods = pd.period_range(totals.index.min(), totals.index.max(), freq=code)
-    return totals.reindex(all_periods, fill_value=0).to_timestamp()
+    return totals.reindex(all_periods, fill_value=0).to_timestamp().rename(metric)
+
+
+def top_per_year(
+    df: pd.DataFrame, by: Level, metric: Metric, n: int = 5
+) -> pd.DataFrame:
+    """The `n` most listened songs, artists, etc. of each year ("Wrapped").
+
+    Returns one row per year and rank, with the identifying columns and the metric.
+    """
+    ranks = _ranks_per_year(df, by, metric)
+    return ranks[ranks["rank"] <= n].reset_index(drop=True)
+
+
+def rank_by_year(
+    df: pd.DataFrame, by: Level, metric: Metric, n: int = 5
+) -> pd.DataFrame:
+    """The yearly ranks of the overall top `n` songs, artists, etc.
+
+    Returns one row per year in which they were played, with the identifying
+    columns, the metric and the rank. Rows are ordered by overall rank, then year.
+    """
+    overall = top(df, by, metric, n)[LEVEL_COLUMNS[by]]
+    # how="right" keeps the order of `overall`, i.e. the overall ranking
+    return _ranks_per_year(df, by, metric).merge(
+        overall, on=LEVEL_COLUMNS[by], how="right"
+    )
+
+
+def new_per_year(df: pd.DataFrame, by: Level = "artist") -> pd.Series:
+    """How many songs, artists, etc. were played for the first time in each year.
+
+    Note that in the first year of the history, everything is new.
+    """
+    counted = df[df["ms_played"] >= MIN_PLAY_MS]
+    first_play = counted.groupby(LEVEL_COLUMNS[by])["local_ts"].min()
+    return first_play.dt.year.value_counts().sort_index().rename_axis("year")
+
+
+def top_days(df: pd.DataFrame, metric: Metric, n: int = 10) -> pd.Series:
+    """The `n` days with the most listening."""
+    return over_time(df, metric, "day").nlargest(n)
+
+
+def on_repeat(df: pd.DataFrame, n: int = 10) -> pd.DataFrame:
+    """The `n` biggest repeats: the most plays of one song on a single day.
+
+    Returns one row each, with day, artist, track and plays.
+    """
+    counted = df[df["ms_played"] >= MIN_PLAY_MS]
+    day = counted["local_ts"].dt.normalize().rename("day")
+    song = [counted[column] for column in LEVEL_COLUMNS["song"]]
+    return (
+        counted.groupby([day, *song]).size().nlargest(n).rename("plays").reset_index()
+    )
+
+
+def _ranks_per_year(df: pd.DataFrame, by: Level, metric: Metric) -> pd.DataFrame:
+    """The metric and rank (1 = most listened) of everything, per year."""
+    year = df["local_ts"].dt.year.rename("year")
+    keys = [year, *[df[column] for column in LEVEL_COLUMNS[by]]]
+    ranks = _total_by(df, keys, metric).rename(metric).reset_index()
+    ranks["rank"] = (
+        ranks.groupby("year")[metric].rank(method="first", ascending=False).astype(int)
+    )
+    return ranks.sort_values(["year", "rank"], ignore_index=True)
 
 
 def _total_by(
