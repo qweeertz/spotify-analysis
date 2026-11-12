@@ -1,14 +1,17 @@
 """Calculations on cleaned streaming history (see `load.clean_streaming_history`)."""
 
+from datetime import date
 from typing import Literal
 
+import numpy as np
 import pandas as pd
 
 Metric = Literal["plays", "hours"]
-Level = Literal["song", "artist", "album", "show", "episode", "audiobook"]
+Level = Literal["song", "artist", "album", "show", "episode", "audiobook", "chapter"]
 Kind = Literal["music", "podcast", "audiobook", "unknown"]
 
-# Columns that identify a song, artist, album, podcast show, episode or audiobook.
+# Columns that identify a song, artist, album, podcast show or episode, or an
+# audiobook or its chapter.
 # Not the Spotify URI: the same song often has several (album version, single,
 # remaster).
 LEVEL_COLUMNS: dict[Level, list[str]] = {
@@ -18,6 +21,7 @@ LEVEL_COLUMNS: dict[Level, list[str]] = {
     "show": ["show"],
     "episode": ["show", "episode"],
     "audiobook": ["audiobook"],
+    "chapter": ["audiobook", "chapter"],
 }
 
 # A play counts only from MIN_PLAY_MS milliseconds on. Spotify counts streams from 30 seconds.
@@ -79,11 +83,23 @@ def os_by_year(df: pd.DataFrame, metric: Metric) -> pd.DataFrame:
 
 
 def by_weekday_and_hour(df: pd.DataFrame, metric: Metric) -> pd.DataFrame:
-    """Listening per weekday (rows, Monday first) and hour of day (columns 0-23)."""
+    """Average listening per weekday (rows, Monday first) and hour (columns 0-23).
+
+    Averaged over all days from the first to the last play, including days without
+    listening: e.g. the plays on a typical Tuesday between 16:00 and 16:59.
+    """
     weekday = df["local_ts"].dt.day_name().rename("weekday")
     hour = df["local_ts"].dt.hour.rename("hour")
-    table = _total_by(df, [weekday, hour], metric).unstack(fill_value=0)
-    return table.reindex(index=WEEKDAYS, columns=range(24), fill_value=0)
+    totals = _total_by(df, [weekday, hour], metric).unstack(fill_value=0)
+    totals = totals.reindex(index=WEEKDAYS, columns=range(24), fill_value=0)
+    if df.empty:
+        return totals
+    days = pd.date_range(
+        df["local_ts"].min().normalize(), df["local_ts"].max().normalize()
+    )
+    days_per_weekday = days.day_name().value_counts().reindex(WEEKDAYS)
+    # A weekday that never occurs (period shorter than a week) gets NaN, not 0.
+    return totals.div(days_per_weekday, axis=0)
 
 
 def top(df: pd.DataFrame, by: Level, metric: Metric, n: int = 10) -> pd.DataFrame:
@@ -116,6 +132,13 @@ def most_skipped(
     return (
         stats.sort_values(["skip_rate", "plays"], ascending=False).head(n).reset_index()
     )
+
+
+def in_period(df: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
+    """Only the plays from `start` to `end` (both days included, local time)."""
+    after_start = df["local_ts"] >= pd.Timestamp(start)
+    before_end = df["local_ts"] < pd.Timestamp(end) + pd.Timedelta(days=1)
+    return df[after_start & before_end]
 
 
 def of_kind(df: pd.DataFrame, kind: Kind) -> pd.DataFrame:
@@ -160,18 +183,55 @@ def top_per_year(
     return ranks[ranks["rank"] <= n].reset_index(drop=True)
 
 
-def rank_by_year(
-    df: pd.DataFrame, by: Level, metric: Metric, n: int = 5
+def all_time_ranks(
+    df: pd.DataFrame,
+    by: Level,
+    metric: Metric,
+    n: int = 10,
+    freq: Literal["year", "month"] = "year",
 ) -> pd.DataFrame:
-    """The yearly ranks of the overall top `n` songs, artists, etc.
+    """The all-time top `n` songs, artists, etc. as of the end of each year or month.
 
-    Returns one row per year in which they were played, with the identifying
-    columns, the metric and the rank. Rows are ordered by overall rank, then year.
+    Like the standings in a "bar chart race": each period ranks everything by the
+    total listened from the start of the history up to the end of that period.
+
+    Returns one row per period and rank (1 = most listened so far), with the
+    period (column "year": the year; "month": the month's first day), the
+    identifying columns and the total so far.
     """
-    overall = top(df, by, metric, n)[LEVEL_COLUMNS[by]]
-    # how="right" keeps the order of `overall`, i.e. the overall ranking
-    return _ranks_per_year(df, by, metric).merge(
-        overall, on=LEVEL_COLUMNS[by], how="right"
+    columns = LEVEL_COLUMNS[by]
+    plays = df.dropna(subset=columns)
+    if plays.empty:
+        return pd.DataFrame(columns=[freq, *columns, metric, "rank"])
+    # A number per song, artist, ...: much faster to reshape than their names.
+    entity = plays.groupby(columns, sort=False).ngroup().rename("entity")
+    if freq == "year":
+        period = plays["local_ts"].dt.year.rename(freq)
+        periods = range(period.min(), period.max() + 1)
+    else:
+        period = plays["local_ts"].dt.to_period("M").rename(freq)
+        periods = pd.period_range(period.min(), period.max(), freq="M")
+    # Periods as rows, entities as columns; then the running total per entity.
+    per_period = _total_by(plays, [period, entity], metric).unstack(fill_value=0)
+    so_far = per_period.reindex(periods, fill_value=0).cumsum()
+
+    # The top n of each row, picked with numpy: much faster than ranking all.
+    values = so_far.to_numpy()
+    top = np.argsort(-values, axis=1, kind="stable")[:, :n]
+    top_n = pd.DataFrame(
+        {
+            freq: np.repeat(so_far.index, top.shape[1]),
+            "entity": so_far.columns.to_numpy()[top].ravel(),
+            metric: np.take_along_axis(values, top, axis=1).ravel(),
+            "rank": np.tile(np.arange(1, top.shape[1] + 1), len(so_far)),
+        }
+    )
+    top_n = top_n[top_n[metric] > 0]  # nothing listened yet: no rank
+    if freq == "month":
+        top_n[freq] = top_n[freq].dt.to_timestamp()
+    names = plays[columns].groupby(entity).first()
+    return top_n.join(names, on="entity")[[freq, *columns, metric, "rank"]].reset_index(
+        drop=True
     )
 
 
