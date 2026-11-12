@@ -284,10 +284,10 @@ def over_time_line(series: pd.Series, metric: Metric, title: str) -> go.Figure:
 def _names(
     table: pd.DataFrame, by: Level, max_title_length: int | None = None
 ) -> list[str]:
-    """Display names: "song – artist", "album – artist" or just "artist".
+    """Display names, e.g. "song – artist", "episode – show" or just "artist".
 
-    With `max_title_length`, a longer song or album title is shortened with "…";
-    the artist is always kept in full.
+    With `max_title_length`, a longer title (song, album, episode) is shortened
+    with "…"; the artist or show is always kept in full.
     """
     columns = list(reversed(LEVEL_COLUMNS[by]))
     names = []

@@ -5,14 +5,19 @@ from typing import Literal
 import pandas as pd
 
 Metric = Literal["plays", "hours"]
-Level = Literal["song", "artist", "album"]
+Level = Literal["song", "artist", "album", "show", "episode", "audiobook"]
+Kind = Literal["music", "podcast", "audiobook", "unknown"]
 
-# Columns that identify a song, artist or album. Not the Spotify URI: the same song
-# often has several (album version, single, remaster).
+# Columns that identify a song, artist, album, podcast show, episode or audiobook.
+# Not the Spotify URI: the same song often has several (album version, single,
+# remaster).
 LEVEL_COLUMNS: dict[Level, list[str]] = {
     "song": ["artist", "track"],
     "artist": ["artist"],
     "album": ["artist", "album"],
+    "show": ["show"],
+    "episode": ["show", "episode"],
+    "audiobook": ["audiobook"],
 }
 
 # A play counts only from MIN_PLAY_MS milliseconds on. Spotify counts streams from 30 seconds.
@@ -82,10 +87,11 @@ def by_weekday_and_hour(df: pd.DataFrame, metric: Metric) -> pd.DataFrame:
 
 
 def top(df: pd.DataFrame, by: Level, metric: Metric, n: int = 10) -> pd.DataFrame:
-    """The `n` most listened songs, artists or albums.
+    """The `n` most listened songs, artists, albums, shows, episodes or audiobooks.
 
     Returns one row each, with the identifying columns (e.g. artist and track)
-    and the metric. Podcasts and audiobooks have no artist, so they are left out.
+    and the metric. Rows without these columns are left out, e.g. podcasts when
+    ranking artists.
     """
     keys = [df[column] for column in LEVEL_COLUMNS[by]]
     return _total_by(df, keys, metric).nlargest(n).rename(metric).reset_index()
@@ -97,7 +103,7 @@ def most_skipped(
     n: int = 10,
     min_plays: int = MIN_PLAYS_FOR_SKIP_RATE,
 ) -> pd.DataFrame:
-    """The `n` songs, artists or albums with the highest skip rate.
+    """The `n` songs, artists, etc. with the highest skip rate.
 
     Only those with at least `min_plays` plays are considered, so a song skipped
     once out of two plays doesn't top the list.
@@ -112,8 +118,13 @@ def most_skipped(
     )
 
 
+def of_kind(df: pd.DataFrame, kind: Kind) -> pd.DataFrame:
+    """Only the plays of one kind, e.g. podcasts. Empty if there are none."""
+    return df[df["kind"] == kind]
+
+
 def select(df: pd.DataFrame, by: Level, key: str | tuple[str, ...]) -> pd.DataFrame:
-    """The plays of one song, artist or album, e.g. for a detail view.
+    """The plays of one song, artist, album, etc., e.g. for a detail view.
 
     Args:
         df: Cleaned streaming history.
