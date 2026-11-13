@@ -24,6 +24,13 @@ st.set_page_config(page_title="Spotify streaming history", layout="wide")
 FIRST_ENTRIES = 10
 STEP_ENTRIES = 5
 
+# Width of the upload box on the start page, in pixels: just enough for its
+# "Upload" button and "200MB per file • ZIP" on one line (narrower, Streamlit
+# stacks them, which makes the box taller).
+UPLOADER_WIDTH = 370
+# Height of that upload box, in pixels, measured in the browser.
+UPLOADER_HEIGHT = 68
+
 # Maximum width of a Wrapped table column, in pixels, and roughly how many
 # characters fit into it. Longer names are cut off with "…".
 MAX_COLUMN_WIDTH = 230
@@ -38,13 +45,39 @@ def load(data: bytes) -> pd.DataFrame:
 
 def main() -> None:
     st.title("Your Spotify streaming history")
-    upload = st.file_uploader("Spotify data (zip)", type="zip")
-    if upload is None:
-        st.info(
+    # Before an upload, the uploader is on the main page, next to the hint; once a
+    # file is uploaded, at the top of the sidebar, so it takes no space above the
+    # charts. Thanks to its key, Streamlit keeps it (and the file) when it moves.
+    if st.session_state.get("upload"):
+        upload = st.sidebar.file_uploader(
+            "Spotify data (zip)", type="zip", key="upload"
+        )
+    else:
+        row = st.container(
+            horizontal=True, vertical_alignment="bottom", wrap=False, key="upload_row"
+        )
+        # The hint as high as the upload box: less padding, and at least its height
+        # (CSS for this row only, via the class Streamlit derives from the key).
+        st.html(
+            f"""<style>
+            .st-key-upload_row [data-testid="stAlertContainer"] {{
+                padding-top: 10px;
+                padding-bottom: 10px;
+                min-height: {UPLOADER_HEIGHT}px;
+                display: flex;
+                align-items: center;
+            }}
+            </style>"""
+        )
+        upload = row.file_uploader(
+            "Spotify data (zip)", type="zip", key="upload", width=UPLOADER_WIDTH
+        )
+        row.info(
             "Request your **Extended streaming history** in your Spotify account "
             "under *Account privacy*. Spotify emails you a zip file after a few "
             "days; upload it here as it is, without unzipping."
         )
+    if upload is None:
         return
 
     try:
@@ -54,6 +87,11 @@ def main() -> None:
         return
 
     df, metric = sidebar(full)
+    st.markdown(
+        "Explore your listening history: what you listened to, when, and how it "
+        "changed over the years. In the sidebar you choose the **period** and "
+        "whether everything is counted in **plays** or in **hours**."
+    )
     if df.empty:
         st.warning("No plays in the selected period.")
         return
@@ -112,6 +150,7 @@ def reset_period(first: date, last: date) -> None:
 
 
 def overview_tab(df: pd.DataFrame, metric: Metric) -> None:
+    section("At a glance", "Totals for the selected period.")
     figures = analysis.key_figures(df)
     tiles = {
         "Hours": figures["hours"],
@@ -123,22 +162,25 @@ def overview_tab(df: pd.DataFrame, metric: Metric) -> None:
     }
     key_figure_tiles(tiles)
     st.caption(
-        f"From {figures['first_play']:%d %b %Y} to {figures['last_play']:%d %b %Y}"
+        f"From {figures['first_play']:%d %b %Y} to {figures['last_play']:%d %b %Y}. "
+        "Every play counts, also skipped ones."
     )
 
     kind, skipped, shuffle = st.columns(3)
     with kind:
-        st.plotly_chart(
+        heading("Kind", f"Music, podcasts and audiobooks, by {metric}.")
+        chart(
             charts.split_bar(
                 analysis.shares(df, "kind", metric), charts.KIND_ORDER, "Kind"
             )
         )
-    for container, column, title in [
-        (skipped, "skipped", "Skipped"),
-        (shuffle, "shuffle", "Shuffle"),
+    for container, column, title, text in [
+        (skipped, "skipped", "Skipped", f"Share of {metric} on plays you skipped."),
+        (shuffle, "shuffle", "Shuffle", f"Share of {metric} with shuffle turned on."),
     ]:
         with container:
-            st.plotly_chart(
+            heading(title, text)
+            chart(
                 charts.split_bar(
                     analysis.shares(df, column, metric),
                     charts.YES_NO_ORDER,
@@ -147,38 +189,71 @@ def overview_tab(df: pd.DataFrame, metric: Metric) -> None:
                 )
             )
 
-    st.plotly_chart(charts.os_area(analysis.os_by_year(df, metric), metric))
+    st.divider()
+    section("How you listen")
+    heading(
+        "Devices over time",
+        "Your listening per year by operating system. Plays in the web player "
+        "count under the system it ran on.",
+    )
+    chart(charts.os_area(analysis.os_by_year(df, metric), metric))
 
     left, right = st.columns([1, 2])
     with left:
-        st.subheader("Countries")
+        heading("Countries", "Where you listened, as recorded by Spotify.")
         st.dataframe(analysis.by_country(df).round({"hours": 1}))
     with right:
-        st.plotly_chart(charts.play_length_histogram(df["ms_played"]))
+        heading(
+            "Play length",
+            "How long each play lasted. The peak on the left are quick skips; plays "
+            "of 10 minutes or more are in the last bar.",
+        )
+        chart(charts.play_length_histogram(df["ms_played"]))
 
+    st.divider()
+    section(
+        "When you listen",
+        "Your average listening per day, by weekday and hour (local time).",
+    )
     by_hour = analysis.by_weekday_and_hour(df, metric)
     left, right = st.columns(2)
     with left:
-        st.plotly_chart(charts.weekday_hour_heatmap(by_hour, metric))
+        heading("By weekday and hour", "Darker means more listening.")
+        chart(charts.weekday_hour_heatmap(by_hour, metric))
     with right:
-        st.plotly_chart(charts.weekday_hour_lines(by_hour, metric))
+        heading(
+            "Over the day",
+            "One line per weekday. Click a day in the legend to hide or show it.",
+        )
+        chart(charts.weekday_hour_lines(by_hour, metric))
 
 
 def music_tab(df: pd.DataFrame, metric: Metric) -> None:
+    section(
+        "Top lists",
+        f"Your most listened songs, artists and albums, by {metric}. Songs and "
+        "albums count all their versions (e.g. single and album) together.",
+    )
     for column, level in zip(st.columns(3), ["song", "artist", "album"]):
         with column:
             top_list(df, level, metric, f"Top {level}s", key=f"top_{level}")
 
+    st.divider()
+    section(
+        "Most skipped",
+        "The songs and artists you skip most often, as a share of their plays. "
+        f"Only those with at least {analysis.MIN_PLAYS_FOR_SKIP_RATE} plays count.",
+    )
     left, right = st.columns(2)
     for column, level in [(left, "song"), (right, "artist")]:
         with column:
             skip_list(df, level)
-    st.caption(
-        "Only songs and artists with at least "
-        f"{analysis.MIN_PLAYS_FOR_SKIP_RATE} plays count."
-    )
 
-    st.subheader("Detail view")
+    st.divider()
+    section(
+        "Detail view",
+        "Pick an artist, song or album to see how your listening to it developed.",
+    )
     detail_view(df, metric)
 
 
@@ -211,20 +286,29 @@ def detail_view(df: pd.DataFrame, metric: Metric) -> None:
     st.caption(f"First heard on {figures['first_play']:%d %b %Y}")
 
     name = " – ".join(reversed(key))
-    over_time = charts.over_time_line(
-        analysis.over_time(selected, metric), metric, name
-    )
     # Over time on the left, the songs on the right (empty for a song).
     left, right = st.columns([2, 1])
     with left:
-        st.plotly_chart(over_time)
+        heading(name, f"Your {metric} per month.")
+        # Always the whole selected period, so you can see when it started.
+        period = (df["local_ts"].min(), df["local_ts"].max())
+        listening = analysis.over_time(selected, metric, between=period)
+        chart(charts.over_time_line(listening, metric, name))
     with right:
         if level == "artist":
             top_list(selected, "song", metric, "Top songs", key="detail_songs")
         elif level == "album":
-            # All songs of the album you played; the export has no tracklist, so
-            # unplayed songs and the album order are unknown.
-            top_list(selected, "song", metric, "Songs you played", n=figures["songs"])
+            top_list(
+                selected,
+                "song",
+                metric,
+                "Songs you played",
+                n=figures["songs"],
+                explanation=(
+                    "All songs of the album you played. Your data has no "
+                    "tracklist, so unplayed songs are missing."
+                ),
+            )
 
 
 def podcasts_tab(df: pd.DataFrame, metric: Metric) -> None:
@@ -258,10 +342,14 @@ def kind_tab(
     if plays.empty:
         st.info(f"No {kind} plays in the selected period.")
         return
+    section("Top lists", f"Your most listened {kind}s, by {metric}.")
     for column, (level, title) in zip(st.columns(2), lists):
         with column:
             top_list(plays, level, metric, title, key=f"top_{level}")
-    st.plotly_chart(
+
+    st.divider()
+    section("Over time", f"Your {kind} {metric} per month.")
+    chart(
         charts.over_time_line(
             analysis.over_time(plays, metric), metric, f"{kind.capitalize()}s over time"
         )
@@ -269,64 +357,91 @@ def kind_tab(
 
 
 def years_tab(df: pd.DataFrame, metric: Metric) -> None:
-    st.plotly_chart(
+    section(
+        "Listening over time",
+        f"Your {metric} per month over the whole selected period.",
+    )
+    chart(
         charts.over_time_line(
             analysis.over_time(df, metric), metric, "Listening per month"
         )
     )
 
-    level = st.segmented_control(
+    st.divider()
+    section(
         "Your own Wrapped",
+        "Your favourites of each year, and how the all-time favourites developed.",
+    )
+    level = st.segmented_control(
+        "Show",
         ["artist", "song"],
         format_func=lambda level: f"{level.capitalize()}s",
         default="artist",
         required=True,
         key="years_level",
     )
-    st.subheader(f"Top {level}s per year")
+    heading(
+        f"Top {level}s per year",
+        f"Your top {level}s of each year. Click a name to highlight it here and in "
+        "the charts below; click it again to remove the highlight.",
+    )
     clicked = wrapped_table(df, metric, level)
-    all_time = analysis.all_time_ranks(df, level, metric)
-    st.plotly_chart(
+    heading(
+        f"All-time top {level}s over the years",
+        f"The all-time top 10 at the end of each year: all your {metric} up to then, "
+        "ranked. A line that ends early dropped out of the top 10.",
+    )
+    chart(
         charts.all_time_bumps(
-            all_time,
+            analysis.all_time_ranks(df, level, metric),
             level,
             metric,
-            f"All-time top {level}s over the years",
+            "",
             highlight=clicked,
         )
     )
-    st.plotly_chart(
+    heading(
+        f"All-time top {level}s: {metric} so far",
+        f"The same top 10 month by month, with their total {metric} so far. Steep "
+        "stretches are times of heavy listening.",
+    )
+    chart(
         charts.all_time_totals(
             analysis.all_time_ranks(df, level, metric, freq="month"),
             level,
             metric,
-            f"All-time top {level}s: {metric} so far, month by month",
+            "",
             highlight=clicked,
         )
     )
-    st.caption(
-        f"The all-time ranking at the end of each year. Click a {level} in the "
-        "table above to highlight it."
-    )
 
-    st.plotly_chart(
-        charts.year_bars(analysis.new_per_year(df), "Discovery", "New artists")
+    st.divider()
+    section(
+        "Discovery",
+        "How many artists you played for the first time in each year. In the first "
+        "year of your history, every artist counts as new.",
     )
-    st.caption("In the first year of your history, every artist counts as new.")
+    chart(charts.year_bars(analysis.new_per_year(df), "Discovery", "New artists"))
 
+    st.divider()
+    section("Calendar", f"One square per day; darker means more {metric}.")
     years = sorted(df["local_ts"].dt.year.unique(), reverse=True)
     year = st.selectbox("Calendar year", years, width=90)  # about as wide as its label
     daily = analysis.over_time(df, metric, "day")
-    st.plotly_chart(charts.calendar_heatmap(daily, metric, year))
+    chart(charts.calendar_heatmap(daily, metric, year))
 
+    st.divider()
+    section("Records")
     left, right = st.columns(2)
     with left:
+        heading("Top listening days", f"The days with the most {metric}.")
         expandable_chart(
             "top_days",
             lambda n: analysis.top_days(df, metric, n),
             lambda days: charts.top_days_bar(days, metric),
         )
     with right:
+        heading("On repeat", "The most plays of a single song on one day.")
         expandable_chart(
             "on_repeat",
             lambda n: analysis.on_repeat(df, n),
@@ -341,9 +456,11 @@ def top_list(
     title: str,
     key: str | None = None,
     n: int = FIRST_ENTRIES,
+    explanation: str | None = None,
 ) -> None:
-    """A top list. With `key`, a "More" button below it shows more entries;
-    without, it shows `n` entries."""
+    """A top list under a heading. With `key`, "Less" and "More" buttons below
+    it change the number of entries; without, it shows `n` entries."""
+    heading(title, explanation)
 
     def table_for(n: int) -> pd.DataFrame:
         return analysis.top(df, level, metric, n)
@@ -352,13 +469,14 @@ def top_list(
         return charts.top_bar(table, level, metric, title)
 
     if key is None:
-        st.plotly_chart(chart_for(table_for(n)))
+        chart(chart_for(table_for(n)))
     else:
         expandable_chart(key, table_for, chart_for)
 
 
 def skip_list(df: pd.DataFrame, level: Level) -> None:
-    """The most skipped songs or artists, with a "More" button."""
+    """The most skipped songs or artists, with "Less" and "More" buttons."""
+    heading(f"Most skipped {level}s")
     expandable_chart(
         f"skipped_{level}",
         lambda n: analysis.most_skipped(df, level, n),
@@ -449,7 +567,7 @@ def expandable_chart(
 
     def show(n: int) -> int:
         table = table_for(n)
-        st.plotly_chart(chart_for(table))
+        chart(chart_for(table))
         return len(table)
 
     expandable(key, show)
@@ -494,6 +612,38 @@ def expandable(key: str, show: Callable[[int], int]) -> None:
 def set_length(key: str, n: int) -> None:
     """Button callback: show `n` entries of list `key`."""
     st.session_state[key] = n
+
+
+def section(title: str, explanation: str | None = None) -> None:
+    """The heading of a section of a tab, with an optional short explanation."""
+    st.subheader(title)
+    if explanation:
+        st.caption(explanation)
+
+
+def heading(title: str, explanation: str | None = None) -> None:
+    """The heading of a single chart or table, with an optional short explanation.
+
+    One level smaller than a section heading, but larger than a chart's own title.
+    """
+    st.markdown(f"#### {title}")
+    if explanation:
+        st.caption(explanation)
+
+
+def chart(fig: go.Figure) -> None:
+    """Show a chart under a `heading`, without the chart's own (smaller) title.
+
+    The space above the plot is reduced accordingly (charts with a legend keep
+    room for it), and so is a fixed chart height, so the plot keeps its size.
+    """
+    has_legend = fig.layout.showlegend is not False and len(fig.data) > 1
+    top = 40 if has_legend else 10
+    saved = fig.layout.margin.t - top
+    fig.update_layout(title_text="", margin_t=top)
+    if fig.layout.height:
+        fig.update_layout(height=fig.layout.height - saved)
+    st.plotly_chart(fig)
 
 
 def key_figure_tiles(tiles: dict[str, float], columns: int | None = None) -> None:

@@ -161,14 +161,29 @@ def select(df: pd.DataFrame, by: Level, key: str | tuple[str, ...]) -> pd.DataFr
 
 
 def over_time(
-    df: pd.DataFrame, metric: Metric, freq: Literal["day", "month", "year"] = "month"
+    df: pd.DataFrame,
+    metric: Metric,
+    freq: Literal["day", "month", "year"] = "month",
+    between: tuple[pd.Timestamp, pd.Timestamp] | None = None,
 ) -> pd.Series:
-    """Listening per day, month or year, including periods without listening (0)."""
+    """Listening per day, month or year, including periods without listening (0).
+
+    Args:
+        df: Cleaned streaming history.
+        metric: Plays or hours.
+        freq: The length of the periods.
+        between: Optional first and last time to cover, e.g. the selected period;
+            by default from the first to the last play in `df`.
+    """
     code = {"day": "D", "month": "M", "year": "Y"}[freq]
     totals = _total_by(df, df["local_ts"].dt.to_period(code).rename(freq), metric)
-    if totals.empty:
+    if between is not None:
+        first, last = (pd.Period(time, code) for time in between)
+    elif totals.empty:
         return totals
-    all_periods = pd.period_range(totals.index.min(), totals.index.max(), freq=code)
+    else:
+        first, last = totals.index.min(), totals.index.max()
+    all_periods = pd.period_range(first, last, freq=code)
     return totals.reindex(all_periods, fill_value=0).to_timestamp().rename(metric)
 
 
