@@ -83,7 +83,7 @@ def split_bar(
     """
     labels = labels or {}
     fig = go.Figure()
-    for color, value in zip(COLORS, order):
+    for color, value in zip(COLORS, order, strict=False):
         if value not in shares.index:
             continue
         name = labels.get(value, str(value).capitalize())
@@ -118,7 +118,7 @@ def os_area(table: pd.DataFrame, metric: Metric) -> go.Figure:
         metric: The metric the table was calculated with.
     """
     fig = go.Figure()
-    for color, os_name in zip(COLORS, OS_ORDER):
+    for color, os_name in zip(COLORS, OS_ORDER, strict=False):
         if os_name not in table.columns:
             continue
         fig.add_trace(
@@ -218,7 +218,9 @@ def weekday_hour_lines(
     fig = go.Figure()
     # The table always has all weekdays, Monday first; short names keep the legend
     # on one line.
-    for color, label, (weekday, row) in zip(COLORS, WEEKDAY_LABELS, table.iterrows()):
+    for color, label, (weekday, row) in zip(
+        COLORS, WEEKDAY_LABELS, table.iterrows(), strict=False
+    ):
         if weekdays is not None and weekday not in weekdays:
             continue
         fig.add_trace(
@@ -295,7 +297,7 @@ def on_repeat_bar(table: pd.DataFrame) -> go.Figure:
     days = [f"{day:%d %b %Y}" for day in table["day"]]
     names = [
         f"{name} · {day}"
-        for name, day in zip(_names(table, "song", shorten=True), days)
+        for name, day in zip(_names(table, "song", shorten=True), days, strict=True)
     ]
     fig = _hbar(table["plays"], names, hover_value="%{x:,} plays")
     return _style(fig, "On repeat")
@@ -452,7 +454,9 @@ def _all_time_lines(
             go.Scatter(
                 x=x,
                 y=rows[y],
-                customdata=list(zip(period_names, rows["rank"], rows[metric])),
+                customdata=list(
+                    zip(period_names, rows["rank"], rows[metric], strict=True)
+                ),
                 mode=mode,
                 line={"color": color(name) or MUTED, "width": 3 if color(name) else 2},
                 marker={"size": 8, "line": {"color": SURFACE, "width": 2}},
@@ -470,7 +474,9 @@ def _all_time_lines(
     ends = list(current[y])
     positions = _spread(ends, min_gap=_label_gap(table[y], ranks=y == "rank"))
     offset = max(0.25, 0.02 * len(periods))
-    for (_, row), end, position in zip(current.iterrows(), ends, positions):
+    for (_, row), end, position in zip(
+        current.iterrows(), ends, positions, strict=True
+    ):
         ink = None if color(row["name"]) else MUTED
         fig.add_trace(
             go.Scatter(
@@ -680,7 +686,7 @@ def _hbar_range(x: pd.Series, names: list[str]) -> float:
     characters fit across the chart.
     """
     x_max = 0.0
-    for length, name in zip(x, names):
+    for length, name in zip(x, names, strict=True):
         name_share = (len(name) + 2) / CHARS_PER_WIDTH
         x_max = max(x_max, length / max(1 - name_share, MIN_BAR_SHARE))
     return x_max or 1

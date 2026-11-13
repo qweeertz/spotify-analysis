@@ -24,7 +24,7 @@ LEVEL_COLUMNS: dict[Level, list[str]] = {
     "chapter": ["audiobook", "chapter"],
 }
 
-# A play counts only from MIN_PLAY_MS milliseconds on. Spotify counts streams from 30 seconds.
+# A play counts only from MIN_PLAY_MS milliseconds on (Spotify itself: 30 seconds).
 MIN_PLAY_MS = 0  # 30_000 for Spotifys criterion
 
 MS_PER_HOUR = 3_600_000

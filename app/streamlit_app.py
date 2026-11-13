@@ -103,7 +103,7 @@ def main() -> None:
     if not analysis.of_kind(full, "audiobook").empty:
         names.append("Audiobooks")
     names.append("Over the years")
-    tabs = dict(zip(names, st.tabs(names)))
+    tabs = dict(zip(names, st.tabs(names), strict=True))
 
     with tabs["Overview"]:
         overview_tab(df, metric)
@@ -234,7 +234,7 @@ def music_tab(df: pd.DataFrame, metric: Metric) -> None:
         f"Your most listened songs, artists and albums, by {metric}. Songs and "
         "albums count all their versions (e.g. single and album) together.",
     )
-    for column, level in zip(st.columns(3), ["song", "artist", "album"]):
+    for column, level in zip(st.columns(3), ["song", "artist", "album"], strict=True):
         with column:
             top_list(df, level, metric, f"Top {level}s", key=f"top_{level}")
 
@@ -343,7 +343,7 @@ def kind_tab(
         st.info(f"No {kind} plays in the selected period.")
         return
     section("Top lists", f"Your most listened {kind}s, by {metric}.")
-    for column, (level, title) in zip(st.columns(2), lists):
+    for column, (level, title) in zip(st.columns(2), lists, strict=True):
         with column:
             top_list(plays, level, metric, title, key=f"top_{level}")
 
@@ -654,7 +654,7 @@ def key_figure_tiles(tiles: dict[str, float], columns: int | None = None) -> Non
     """
     tiles = {label: value for label, value in tiles.items() if value}
     slots = st.columns(columns or len(tiles))
-    for column, (label, value) in zip(slots, tiles.items()):
+    for column, (label, value) in zip(slots, tiles.items(), strict=False):
         column.metric(label, f"{value:,.0f}", border=True)
 
 

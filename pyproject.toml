@@ -1,7 +1,7 @@
 [project]
 name = "spotify-analysis"
 version = "0.1.0"
-description = "Add your description here"
+description = "Explore your Spotify extended streaming history in a Streamlit app that runs in the browser."
 readme = "README.md"
 authors = [
     { name = "Henning"}
@@ -21,6 +21,13 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "jupyterlab>=4.6.6",
-    "pytest>=9.2.0",
     "ruff>=0.17.4",
 ]
+
+[tool.ruff.lint]
+# Default rules (pyflakes, pycodestyle) plus import sorting, bugbear, pyupgrade,
+# simplify and ruff's own checks.
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+# The en dash (–) and multiplication sign (×) in labels and docstrings are on
+# purpose.
+ignore = ["RUF001", "RUF002", "RUF003"]
